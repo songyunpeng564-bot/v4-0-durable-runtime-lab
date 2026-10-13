@@ -56,7 +56,7 @@ jobs:
           cd "$RUNNER_TEMP/dbos-poc"
           npm init -y >/dev/null
           timeout --signal=TERM --kill-after=5s 170s npm install --no-audit --no-fund --save-exact @dbos-inc/dbos-sdk
-          node -p "'DBOS_SDK_VERSION=' + require('@dbos-inc/dbos-sdk/package.json').version"
+          npm ls --depth=0 @dbos-inc/dbos-sdk
           timeout --signal=TERM --kill-after=5s 90s node --input-type=module <<'NODE'
           import { DBOS } from '@dbos-inc/dbos-sdk';
           DBOS.setConfig({
