@@ -1,0 +1,12 @@
+V4-0 免费公开实验仓库：创建说明
+
+建议新仓库名称：v4-0-durable-runtime-lab
+可见性：Public（只对新仓库设置）。
+不要选择任何现有仓库作为模板；也不要改动现有仓库隐私设置。
+
+1. 打开 https://github.com/new ，Repository name 填 v4-0-durable-runtime-lab，选择 Public；不要勾选 Initialize with README / .gitignore / License，点击 Create repository。
+2. 在新仓库页面点击 Upload an existing file；打开本 ZIP 解压后的 v4-0-public-runtime-lab 文件夹，把文件夹中的 README.md、SECURITY.md、开始前请阅读.txt 和 .github 文件夹一起拖入上传区，确认上传清单存在 .github/workflows/runtime-bootstrap.yml，点击 Commit changes。
+3. 暂时不要运行 Actions。把新建仓库的网址发给真维斯，我们先核对实际公开内容，确认没有私人资料、触发规则安全。
+4. 真维斯核对后，才由你在新仓库 Actions 中主动运行一次（工作流本身默认关闭），读取日志开始真正的 DBOS / Restate 启动验收。
+
+公开标准 GitHub 托管运行器通常免费；如果你账户或组织有特殊限制，以实际 GitHub 显示为准。测试启动不等于三方案故障对比通过。

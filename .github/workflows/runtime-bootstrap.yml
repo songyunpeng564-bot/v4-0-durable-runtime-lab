@@ -1,0 +1,134 @@
+name: Public synthetic DBOS and Restate runtime bootstrap
+
+# Manual only: no push, pull_request, schedule or other triggers.
+on:
+  workflow_dispatch:
+    inputs:
+      run_synthetic_bootstrap:
+        description: 'I approve a public synthetic-only Linux runtime smoke test'
+        type: boolean
+        required: true
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: public-synthetic-runtime-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    if: ${{ inputs.run_synthetic_bootstrap == true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: synthetic_user
+          POSTGRES_PASSWORD: synthetic_local_only
+          POSTGRES_DB: synthetic_v4_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U synthetic_user -d synthetic_v4_db"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      CI: 'true'
+      DBOS_SYSTEM_DATABASE_URL: postgresql://synthetic_user:synthetic_local_only@127.0.0.1:5432/synthetic_v4_db
+
+    steps:
+      # Deliberately NO actions/checkout: no repository files, credentials or source imports.
+      - name: Node.js 22 bootstrap
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: DBOS real initialization against disposable PostgreSQL
+        id: dbos
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/dbos-poc"
+          cd "$RUNNER_TEMP/dbos-poc"
+          npm init -y >/dev/null
+          timeout --signal=TERM --kill-after=5s 170s npm install --no-audit --no-fund --save-exact @dbos-inc/dbos-sdk
+          node -p "'DBOS_SDK_VERSION=' + require('@dbos-inc/dbos-sdk/package.json').version"
+          timeout --signal=TERM --kill-after=5s 90s node --input-type=module <<'NODE'
+          import { DBOS } from '@dbos-inc/dbos-sdk';
+          DBOS.setConfig({
+            name: 'public-synthetic-runtime-bootstrap',
+            applicationVersion: '0.0.1',
+            systemDatabaseUrl: process.env.DBOS_SYSTEM_DATABASE_URL,
+          });
+          await DBOS.launch();
+          console.log('DBOS_REAL_POSTGRES_LAUNCH=PASS');
+          await DBOS.shutdown();
+          console.log('DBOS_REAL_SHUTDOWN=PASS');
+          NODE
+
+      - name: Restate real server local listener and TypeScript SDK import
+        id: restate
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/restate-poc"
+          cd "$RUNNER_TEMP/restate-poc"
+          npm init -y >/dev/null
+          timeout --signal=TERM --kill-after=5s 170s npm install --no-audit --no-fund --save-exact @restatedev/restate-server@1.7.13 @restatedev/restate-sdk
+          node -p "'RESTATE_SERVER_NPM_VERSION=' + require('@restatedev/restate-server/package.json').version"
+          node -p "'RESTATE_SDK_VERSION=' + require('@restatedev/restate-sdk/package.json').version"
+          server=./node_modules/.bin/restate-server
+          test -x "$server"
+          "$server" > "$RUNNER_TEMP/restate-server-synthetic.log" 2>&1 &
+          owned_pid=$!
+          cleanup() {
+            # Only signal the exact child launched by THIS step, if still alive.
+            if kill -0 "$owned_pid" 2>/dev/null; then
+              kill -TERM "$owned_pid" 2>/dev/null || true
+            fi
+            wait "$owned_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          ready=0
+          for attempt in $(seq 1 50); do
+            if (echo >/dev/tcp/127.0.0.1/9070) >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            if ! kill -0 "$owned_pid" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo 'RESTATE_LOCAL_TCP_LISTENER=BLOCKED'
+            tail -n 40 "$RUNNER_TEMP/restate-server-synthetic.log" || true
+            exit 1
+          fi
+          echo 'RESTATE_LOCAL_TCP_9070_LISTENER=PASS'
+          node --input-type=module <<'NODE'
+          await import('@restatedev/restate-sdk');
+          console.log('RESTATE_TYPESCRIPT_SDK_IMPORT=PASS');
+          NODE
+
+      - name: Explicit bootstrap-only verdict
+        if: always()
+        shell: bash
+        run: |
+          echo 'REAL_F1_F8_THREE_WAY=NOT_RUN'
+          echo 'WINDOWS_P0=NOT_RUN'
+          echo 'HISTORIC_57_PARITY=NOT_RUN'
+          echo 'NO_PRIVATE_REPOSITORY_CHECKOUT=true'
+          echo 'NO_LIVE_BUSINESS_SIDE_EFFECTS=true'
+          echo 'DBOS_RESULT=${{ steps.dbos.outcome }}'
+          echo 'RESTATE_RESULT=${{ steps.restate.outcome }}'
+          if [ '${{ steps.dbos.outcome }}' != success ] || [ '${{ steps.restate.outcome }}' != success ]; then
+            echo 'RUNTIME_BOOTSTRAP=PARTIAL_OR_FAILED'
+            exit 1
+          fi
+          echo 'RUNTIME_BOOTSTRAP_BOTH=PASS'
