@@ -1,0 +1,86 @@
+name: V4-0 PostgreSQL Receiver Crash and Concurrent Idempotency
+on:
+  workflow_dispatch:
+    inputs:
+      approve_receiver_pg_test:
+        description: 'Approve one synthetic-only PostgreSQL receiver crash/concurrency test'
+        type: boolean
+        required: true
+        default: false
+permissions: {}
+concurrency:
+  group: v4-public-receiver-postgres-durability
+  cancel-in-progress: false
+jobs:
+  receiver-proof:
+    if: ${{ inputs.approve_receiver_pg_test == true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: synthetic_user
+          POSTGRES_PASSWORD: synthetic_local_only
+          POSTGRES_DB: synthetic_v4_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U synthetic_user -d synthetic_v4_db"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      CI: 'true'
+      V4_RECEIVER_APPROVED: 'yes'
+      PGURL: postgresql://synthetic_user:synthetic_local_only@127.0.0.1:5432/synthetic_v4_db
+    steps:
+      - name: Setup Node 22 in disposable Ubuntu runner
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Download only immutable own public synthetic modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/v4-receiver-durability"
+          cd "$RUNNER_TEMP/v4-receiver-durability"
+          src="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/experiments/receiver-durability"
+          for file in contract.mjs contract.test.mjs receiver.mjs run-receiver.mjs; do
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 "$src/$file" -o "$file"
+            node --check "$file"
+          done
+          test ! -f "$GITHUB_WORKSPACE/CURRENT.md"
+          test ! -f "$GITHUB_WORKSPACE/HANDOFF.md"
+          echo 'PUBLIC_SYNTHETIC_SOURCE_ONLY=true'
+      - name: Run contract unit checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/v4-receiver-durability"
+          node --test contract.test.mjs
+      - name: Install only PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/v4-receiver-durability"
+          npm init -y >/dev/null
+          timeout --signal=TERM --kill-after=5s 150s npm install --no-audit --no-fund --save-exact pg@8.16.3
+          npm ls --depth=0 pg
+      - name: Run real PostgreSQL transactional multi-receiver crash test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/v4-receiver-durability"
+          timeout --signal=TERM --kill-after=5s 180s node run-receiver.mjs
+      - name: Explicit evidence boundaries
+        if: always()
+        shell: bash
+        run: |
+          echo 'REAL_TELEGRAM_PROMOTION_CODEX=NOT_USED'
+          echo 'DBOS_RESTATE_REGISTERED_WORKFLOWS_IN_THIS_TEST=NOT_RUN'
+          echo 'DATABASE_POWER_LOSS_OR_MULTI_HOST_PARTITION=NOT_RUN'
+          echo 'RECEIVER_ATTEMPTS_AND_EFFECTS_ARE_SAME_PG_TRANSACTION=true'
+          echo 'ORIGINAL_WINDOWS_P0=0/6_NOT_RUN'
+          echo 'HISTORIC_THREE_WAY_57=NOT_RUN'
+          echo 'V3_PRODUCTION_UNTOUCHED=true'
