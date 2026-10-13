@@ -1,0 +1,80 @@
+name: V4-0 Owned Process Crash Window DBOS vs Restate
+on:
+  workflow_dispatch:
+    inputs:
+      approve_owned_process_crash:
+        description: 'Approve disposable Linux test-owned child self-exit 73 after synthetic effect'
+        type: boolean
+        required: true
+        default: false
+permissions: {}
+concurrency:
+  group: public-v4-crash-window-one-run-at-a-time
+  cancel-in-progress: false
+jobs:
+  probe:
+    if: ${{ inputs.approve_owned_process_crash == true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: synthetic_user
+          POSTGRES_PASSWORD: synthetic_local_only
+          POSTGRES_DB: synthetic_v4_db
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U synthetic_user -d synthetic_v4_db"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      CI: 'true'
+      V4_RUN_CRASH_WINDOW: approved
+      DBOS_SYSTEM_DATABASE_URL: postgresql://synthetic_user:synthetic_local_only@127.0.0.1:5432/synthetic_v4_db
+    steps:
+      - name: Setup Node.js 22 on disposable runner
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Get only fixed public synthetic files from same immutable commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/v4-crash-window"
+          cd "$RUNNER_TEMP/v4-crash-window"
+          src="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/experiments/crash-window"
+          for file in crash-effect.mjs dbos-worker.mjs restate-worker.mjs run-crash-window.mjs; do
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 "$src/$file" -o "$file"
+            node --check "$file"
+          done
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 \
+            "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/experiments/f3-f5/synthetic-receiver.mjs" -o synthetic-receiver.mjs
+          node --check synthetic-receiver.mjs
+          test ! -f "$GITHUB_WORKSPACE/CURRENT.md"
+          echo 'PUBLIC_SYNTHETIC_SOURCE_ONLY=TRUE'
+      - name: Install identical proven real SDK and local server versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/v4-crash-window"
+          npm init -y >/dev/null
+          timeout --signal=TERM --kill-after=5s 170s npm install --no-audit --no-fund --save-exact \
+            @dbos-inc/dbos-sdk@5.2.11 @restatedev/restate-sdk@1.17.3 @restatedev/restate-server@1.7.13
+          npm ls --depth=0
+      - name: Run actual DBOS and Restate owned-process crash window comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/v4-crash-window"
+          timeout --signal=TERM --kill-after=5s 185s node run-crash-window.mjs
+      - name: State experiment scope even when duplicates are observed
+        if: always()
+        shell: bash
+        run: |
+          echo 'ORIGINAL_V3_EXECUTION=NOT_RUN'
+          echo 'WINDOWS_ORIGINAL_P0=0/6_NOT_RUN'
+          echo 'HISTORIC_57_THREE_WAY=NOT_RUN'
+          echo 'REAL_BUSINESS_TELEGRAM=NOT_USED'
+          echo 'PUBLIC_SYNTHETIC_ONLY=true'
