@@ -1,0 +1,77 @@
+name: Real DBOS vs Restate Synthetic F3-F5 Lost ACK Trial
+on:
+  workflow_dispatch:
+    inputs:
+      run_synthetic_f3_f5:
+        description: 'I approve one real framework trial with only public synthetic local effects'
+        type: boolean
+        required: true
+        default: false
+permissions: {}
+concurrency:
+  group: public-real-f3-f5-ack-loss
+  cancel-in-progress: false
+jobs:
+  compare:
+    if: ${{ inputs.run_synthetic_f3_f5 == true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: synthetic_user
+          POSTGRES_PASSWORD: synthetic_local_only
+          POSTGRES_DB: synthetic_v4_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U synthetic_user -d synthetic_v4_db"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      CI: 'true'
+      DBOS_SYSTEM_DATABASE_URL: postgresql://synthetic_user:synthetic_local_only@127.0.0.1:5432/synthetic_v4_db
+    steps:
+      - name: Prepare Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Fetch only four fixed public experiment source modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/v4-real-f3f5"
+          cd "$RUNNER_TEMP/v4-real-f3f5"
+          base="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/experiments/f3-f5"
+          for f in synthetic-receiver.mjs effect-client.mjs restate-service.mjs run-f3-f5.mjs; do
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 "$base/$f" -o "$f"
+            node --check "$f"
+          done
+          test ! -f "$GITHUB_WORKSPACE/CURRENT.md"
+          echo 'NO_PRIVATE_REPO_CHECKOUT=true'
+      - name: Install precisely pinned real runtime libraries to disposable directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/v4-real-f3f5"
+          npm init -y >/dev/null
+          timeout --signal=TERM --kill-after=5s 170s npm install --no-audit --no-fund --save-exact \
+            @dbos-inc/dbos-sdk@5.2.11 @restatedev/restate-server@1.7.13 @restatedev/restate-sdk@1.17.3
+          npm ls --depth=0
+      - name: Run actual DBOS Workflow and Restate Service with independent receiver
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/v4-real-f3f5"
+          timeout --signal=TERM --kill-after=5s 190s node run-f3-f5.mjs
+      - name: Boundary statement
+        if: always()
+        shell: bash
+        run: |
+          echo 'CRASH_AFTER_EFFECT_BEFORE_JOURNAL=NOT_RUN'
+          echo 'WINDOWS_ORIGINAL_P0=0/6_NOT_RUN'
+          echo 'HISTORIC_THREE_WAY_57=NOT_RUN'
+          echo 'V3_PRODUCTION_CHANGED=false'
+          echo 'PUBLIC_SYNTHETIC_ONLY=true'
