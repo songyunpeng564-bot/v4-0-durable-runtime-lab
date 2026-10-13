@@ -1,0 +1,79 @@
+name: V4-0 DBOS Restate Crash Mitigations (Synthetic)
+on:
+  workflow_dispatch:
+    inputs:
+      approve_synthetic_mitigations:
+        description: 'Run only synthetic idempotency vs outcome-unknown in GitHub disposable Linux runner'
+        type: boolean
+        required: true
+        default: false
+permissions: {}
+concurrency:
+  group: public-v4-owned-crash-mitigation-once
+  cancel-in-progress: false
+jobs:
+  mitigation:
+    if: ${{ inputs.approve_synthetic_mitigations == true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: synthetic_user
+          POSTGRES_PASSWORD: synthetic_local_only
+          POSTGRES_DB: synthetic_v4_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U synthetic_user -d synthetic_v4_db"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      CI: 'true'
+      V4_MITIGATION_APPROVED: 'yes'
+      DBOS_SYSTEM_DATABASE_URL: postgresql://synthetic_user:synthetic_local_only@127.0.0.1:5432/synthetic_v4_db
+    steps:
+      - name: Setup Node.js 22 on disposable runner
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Get only fixed public synthetic code from immutable commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/v4-mitigation-real"
+          cd "$RUNNER_TEMP/v4-mitigation-real"
+          src="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/experiments/mitigations"
+          for file in safe-receiver.mjs effect-mitigations.mjs dbos-worker.mjs restate-worker.mjs run-mitigations.mjs; do
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3 "$src/$file" -o "$file"
+            node --check "$file"
+          done
+          test ! -f "$GITHUB_WORKSPACE/CURRENT.md"
+          echo 'SYNTHETIC_PUBLIC_CODE_ONLY=true'
+      - name: Install same genuine framework versions as previous crash diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/v4-mitigation-real"
+          npm init -y >/dev/null
+          timeout --signal=TERM --kill-after=5s 170s npm install --no-audit --no-fund --save-exact \
+            @dbos-inc/dbos-sdk@5.2.11 @restatedev/restate-sdk@1.17.3 @restatedev/restate-server@1.7.13
+          npm ls --depth=0
+      - name: Real DBOS and Restate worker crash after effect with mitigation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/v4-mitigation-real"
+          timeout --signal=TERM --kill-after=5s 250s node run-mitigations.mjs
+      - name: Honest experiment boundary
+        if: always()
+        shell: bash
+        run: |
+          echo 'EXPECTED_4_REAL_VENDOR_RECOVERY_CASES=NOT_AUTO_ACCEPTED'
+          echo 'RECEIVER_RESTART_OR_MULTIWRITER_ATOMICITY=NOT_RUN'
+          echo 'REAL_EXTERNAL_TELEGRAM_EFFECTS=NOT_USED'
+          echo 'ORIGINAL_WINDOWS_P0=0/6_NOT_RUN'
+          echo 'HISTORIC_THREE_WAY_57=NOT_RUN'
+          echo 'NO_ORIGINAL_V3_SOURCE_OR_PRODUCTION_WORKER=true'
